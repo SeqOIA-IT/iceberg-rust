@@ -85,7 +85,7 @@ pub struct FieldSummary {
     /// Whether the manifest contains at least one partition with a null value for the field
     pub contains_null: bool,
     /// Whether the manifest contains at least one partition with a NaN value for the field
-    pub contains_nan: Option<bool>,
+    pub contains_nan: bool,
     /// Lower bound for the non-null, non-NaN values in the partition field, or null if all values are null or NaN.
     /// If -0.0 is a value of the partition field, the lower_bound must not be +0.0
     pub lower_bound: Option<Value>,
@@ -217,12 +217,12 @@ mod _serde {
                 sequence_number: value.sequence_number,
                 min_sequence_number: value.min_sequence_number,
                 added_snapshot_id: value.added_snapshot_id,
-                added_files_count: value.added_files_count.unwrap(),
-                existing_files_count: value.existing_files_count.unwrap(),
-                deleted_files_count: value.deleted_files_count.unwrap(),
-                added_rows_count: value.added_rows_count.unwrap(),
-                existing_rows_count: value.existing_rows_count.unwrap(),
-                deleted_rows_count: value.deleted_rows_count.unwrap(),
+                added_files_count: value.added_files_count.or(Some(0)).unwrap(),
+                existing_files_count: value.existing_files_count.or(Some(0)).unwrap(),
+                deleted_files_count: value.deleted_files_count.or(Some(0)).unwrap(),
+                added_rows_count: value.added_rows_count.or(Some(0)).unwrap(),
+                existing_rows_count: value.existing_rows_count.or(Some(0)).unwrap(),
+                deleted_rows_count: value.deleted_rows_count.or(Some(0)).unwrap(),
                 partitions: value
                     .partitions
                     .map(|v| v.into_iter().map(Into::into).collect()),
@@ -237,7 +237,7 @@ mod _serde {
         /// Whether the manifest contains at least one partition with a null value for the field
         pub contains_null: bool,
         /// Whether the manifest contains at least one partition with a NaN value for the field
-        pub contains_nan: Option<bool>,
+        pub contains_nan: bool,
         /// Lower bound for the non-null, non-NaN values in the partition field, or null if all values are null or NaN.
         /// If -0.0 is a value of the partition field, the lower_bound must not be +0.0
         pub lower_bound: Option<ByteBuf>,
@@ -742,7 +742,7 @@ mod tests {
             deleted_rows_count: Some(0),
             partitions: Some(vec![FieldSummary {
                 contains_null: true,
-                contains_nan: Some(false),
+                contains_nan: false,
                 lower_bound: Some(Value::Int(1234)),
                 upper_bound: Some(Value::Int(76890)),
             }]),
@@ -817,7 +817,7 @@ mod tests {
             deleted_rows_count: Some(0),
             partitions: Some(vec![FieldSummary {
                 contains_null: true,
-                contains_nan: Some(false),
+                contains_nan: false,
                 lower_bound: Some(Value::Int(1234)),
                 upper_bound: Some(Value::Int(76890)),
             }]),
