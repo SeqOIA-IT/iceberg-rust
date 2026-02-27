@@ -825,6 +825,11 @@ fn update_partitions(
                             *current = *val
                         }
                     }
+                    (Value::String(val), Value::String(current)) => { 
+                        if *current > *val {
+                            *current = val.clone()
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -870,6 +875,11 @@ fn update_partitions(
                     (Value::TimestampTZ(val), Value::TimestampTZ(current)) => {
                         if *current < *val {
                             *current = *val
+                        }
+                    }
+                    (Value::String(val), Value::String(current)) => { 
+                        if *current < *val {
+                            *current = val.clone()
                         }
                     }
                     _ => {}
