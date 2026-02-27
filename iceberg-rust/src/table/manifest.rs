@@ -581,7 +581,7 @@ impl<'schema, 'metadata> ManifestWriter<'schema, 'metadata> {
                     .iter()
                     .map(|_| FieldSummary {
                         contains_null: false,
-                        contains_nan: None,
+                        contains_nan: false,
                         lower_bound: None,
                         upper_bound: None,
                     })
