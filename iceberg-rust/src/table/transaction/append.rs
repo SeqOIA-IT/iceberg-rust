@@ -19,7 +19,10 @@ fn split_datafiles_once(
     rect: Rectangle,
     names: &[&str],
 ) -> Result<[(Vec<ManifestEntry>, Rectangle); 2], Error> {
+    //println!("rect.min={:?},rect.max={:?}",rect.min,rect.max);
+
     if let Ordering::Equal = cmp_with_priority(&rect.min, &rect.max)? {
+        //println!("ordering is EQUAL");
         let mut smaller = files.collect::<Result<Vec<_>, Error>>()?;
         let larger = smaller.split_off(smaller.len() / 2);
 
@@ -29,6 +32,7 @@ fn split_datafiles_once(
         ]);
     }
 
+    
     let mut smaller = Vec::new();
     let mut larger = Vec::new();
     let mut smaller_rect = None;
@@ -37,12 +41,14 @@ fn split_datafiles_once(
     for manifest_entry in files {
         let manifest_entry = manifest_entry?;
         let position = partition_struct_to_vec(manifest_entry.data_file().partition(), names)?;
+        //println!("for datafile {}, position={:?}",manifest_entry.data_file().file_path(),position);
         // Compare distance to upper and lower bound. Since you can't compute a "norm" for a multidimensional vector where the dimensions have different datatypes,
         // the dimensions are compared individually and the norm is computed by weighing the earlier columns more than the later.
         if let Ordering::Greater = cmp_with_priority(
             &try_sub(&position, &rect.min)?,
             &try_sub(&rect.max, &position)?,
         )? {
+            //println!("ordering is GREATER");
             // if closer to upper bound
             larger.push(manifest_entry);
 
@@ -52,6 +58,7 @@ fn split_datafiles_once(
                 larger_rect.expand_with_node(position);
             }
         } else {
+            //println!("ordering is NOT GREATER");
             // if closer to lower bound
             smaller.push(manifest_entry);
 
@@ -65,11 +72,13 @@ fn split_datafiles_once(
     Ok([
         (
             smaller,
-            smaller_rect.expect("No files selected for the smaller rectangle"),
+            smaller_rect.unwrap_or(Rectangle::new(SmallVec::new(), SmallVec::new()))
+            //smaller_rect.expect("No files selected for the smaller rectangle"),
         ),
         (
             larger,
-            larger_rect.expect("No files selected for the smaller rectangle"),
+            larger_rect.unwrap_or(Rectangle::new(SmallVec::new(), SmallVec::new()))
+            //larger_rect.expect("No files selected for the larger rectangle"),
         ),
     ])
 }
@@ -100,10 +109,13 @@ pub(crate) fn split_datafiles(
             names,
             n_split - 1,
         )?;
-        let mut larger =
+        if !larger.is_empty() {
+            let mut larger =
             split_datafiles(larger.into_iter().map(Ok), larger_rect, names, n_split - 1)?;
 
-        smaller.append(&mut larger);
+            smaller.append(&mut larger);
+        }
+        
         Ok(smaller)
     }
 }
