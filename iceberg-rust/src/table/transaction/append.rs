@@ -65,11 +65,11 @@ fn split_datafiles_once(
     Ok([
         (
             smaller,
-            smaller_rect.expect("No files selected for the smaller rectangle"),
+            smaller_rect.unwrap_or(Rectangle::new(SmallVec::new(), SmallVec::new()))
         ),
         (
             larger,
-            larger_rect.expect("No files selected for the smaller rectangle"),
+            larger_rect.unwrap_or(Rectangle::new(SmallVec::new(), SmallVec::new()))
         ),
     ])
 }
@@ -100,10 +100,13 @@ pub(crate) fn split_datafiles(
             names,
             n_split - 1,
         )?;
+        if !larger.is_empty() {
+           
         let mut larger =
             split_datafiles(larger.into_iter().map(Ok), larger_rect, names, n_split - 1)?;
 
-        smaller.append(&mut larger);
+            smaller.append(&mut larger);
+        }
         Ok(smaller)
     }
 }
