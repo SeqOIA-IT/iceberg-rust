@@ -26,6 +26,7 @@ use iceberg_rust_spec::{
         table_metadata::TableMetadata,
         view_metadata::{Version, ViewMetadata, DEFAULT_VERSION_ID},
     },
+    types::{StructField, Type},
     view_metadata::Materialization,
 };
 use serde::{Deserialize, Serialize};
@@ -178,10 +179,20 @@ impl CreateTableBuilder {
     }
 }
 
+// get max colum id "deeper"
+fn get_max_column_id(x:&StructField) -> i32 {
+    match &x.field_type {
+        Type::Primitive(_p) => x.id,
+        Type::List(l) => std::cmp::max(x.id,l.element_id),
+        Type::Struct(s) => std::cmp::max(x.id,s.iter().map(|c| get_max_column_id(c)).max().unwrap_or(0)),
+        Type::Map(_m) => 0 // not implemented for now
+    }
+}
+
 impl TryInto<TableMetadata> for CreateTable {
     type Error = Error;
     fn try_into(self) -> Result<TableMetadata, Self::Error> {
-        let last_column_id = self.schema.fields().iter().map(|x| x.id).max().unwrap_or(0);
+        let last_column_id = self.schema.fields().iter().map(|x| {get_max_column_id(x)}).max().unwrap_or(0);
 
         let last_partition_id = self
             .partition_spec
@@ -214,11 +225,8 @@ impl TryInto<TableMetadata> for CreateTable {
             snapshots: HashMap::new(),
             snapshot_log: Vec::new(),
             metadata_log: Vec::new(),
-            sort_orders: HashMap::from_iter(vec![(
-                DEFAULT_SORT_ORDER_ID,
-                self.write_order.unwrap_or_default(),
-            )]),
-            default_sort_order_id: DEFAULT_SORT_ORDER_ID,
+            sort_orders: HashMap::from_iter(if let Some(s) = &self.write_order { vec![(s.order_id,s.clone())]} else { vec![(DEFAULT_SORT_ORDER_ID,SortOrder::default())]}),
+            default_sort_order_id: if let Some(s) = &self.write_order { s.order_id} else { DEFAULT_SORT_ORDER_ID} ,
             refs: HashMap::new(),
         })
     }
