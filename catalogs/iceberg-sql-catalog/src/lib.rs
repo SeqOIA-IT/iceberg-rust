@@ -219,7 +219,7 @@ impl Catalog for SqlCatalog {
         let namespace = namespace.to_string();
 
         let rows = {
-            sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = '{}' and table_namespace = '{}';",&name, &namespace)).fetch_all(&self.pool).await.map_err(Error::from)?
+            sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location,iceberg_type from iceberg_tables where catalog_name = '{}' and table_namespace = '{}';",&name, &namespace)).fetch_all(&self.pool).await.map_err(Error::from)?
         };
         let iter = rows.iter().map(query_map);
 
@@ -262,7 +262,7 @@ impl Catalog for SqlCatalog {
         let name = identifier.name().to_string();
 
         let rows = {
-            sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = '{}' and table_namespace = '{}' and table_name = '{}';",&catalog_name,
+            sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location, iceberg_type from iceberg_tables where catalog_name = '{}' and table_namespace = '{}' and table_name = '{}';",&catalog_name,
                 &namespace,
                 &name)).fetch_all(&self.pool).await.map_err(Error::from)?
         };
@@ -310,7 +310,7 @@ impl Catalog for SqlCatalog {
             let name = identifier.name().to_string();
 
             let row = {
-                sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location from iceberg_tables where catalog_name = '{}' and table_namespace = '{}' and table_name = '{}';",&catalog_name,
+                sqlx::query(&format!("select table_namespace, table_name, metadata_location, previous_metadata_location, iceberg_type from iceberg_tables where catalog_name = '{}' and table_namespace = '{}' and table_name = '{}';",&catalog_name,
                     &namespace,
                     &name)).fetch_one(&self.pool).await.map_err(|_| IcebergError::CatalogNotFound)?
             };
