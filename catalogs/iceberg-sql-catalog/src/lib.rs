@@ -73,6 +73,7 @@ impl SqlCatalog {
                                 table_name varchar(255) not null,
                                 metadata_location varchar(255) not null,
                                 previous_metadata_location varchar(255),
+                                iceberg_type varchar(255),
                                 primary key (catalog_name, table_namespace, table_name)
                             );",
                     )
@@ -116,8 +117,9 @@ impl SqlCatalog {
 struct TableRef {
     table_namespace: String,
     table_name: String,
-    metadata_location: String,
+    metadata_location: String,    
     _previous_metadata_location: Option<String>,
+    iceberg_type: Option<String>,
 }
 
 fn query_map(row: &AnyRow) -> Result<TableRef, sqlx::Error> {
@@ -135,6 +137,17 @@ fn query_map(row: &AnyRow) -> Result<TableRef, sqlx::Error> {
             } else {
                 Err(err)
             }
+        })?,
+        iceberg_type: row.try_get::<String, _>(4).map(Some).or_else(|err| { 
+            if let sqlx::Error::ColumnDecode {
+                index: _,
+                source: _,
+            } = err
+            {
+                Ok(None)
+            } else {
+                Err(err)
+            }        
         })?,
     })
 }
@@ -363,7 +376,7 @@ impl Catalog for SqlCatalog {
             let name = identifier.name().to_string();
             let metadata_location = metadata_location.to_string();
 
-            sqlx::query(&format!("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location) values ('{catalog_name}', '{namespace}', '{name}', '{metadata_location}');")).execute(&self.pool).await.map_err(Error::from)?;
+            sqlx::query(&format!("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location, iceberg_type) values ('{catalog_name}', '{namespace}', '{name}', '{metadata_location}','TABLE');")).execute(&self.pool).await.map_err(Error::from)?;
         }
         self.cache.write().unwrap().insert(
             identifier.clone(),
@@ -403,7 +416,7 @@ impl Catalog for SqlCatalog {
             let name = identifier.name().to_string();
             let metadata_location = metadata_location.to_string();
 
-            sqlx::query(&format!("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location) values ('{catalog_name}', '{namespace}', '{name}', '{metadata_location}');")).execute(&self.pool).await.map_err(Error::from)?;
+            sqlx::query(&format!("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location, iceberg_type) values ('{catalog_name}', '{namespace}', '{name}', '{metadata_location}','VIEW');")).execute(&self.pool).await.map_err(Error::from)?;
         }
         self.cache.write().unwrap().insert(
             identifier.clone(),
@@ -656,7 +669,7 @@ impl Catalog for SqlCatalog {
             let name = identifier.name().to_string();
             let metadata_location = metadata_location.to_string();
 
-            sqlx::query(&format!("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location) values ('{catalog_name}', '{namespace}', '{name}', '{metadata_location}');")).execute(&self.pool).await.map_err(Error::from)?;
+            sqlx::query(&format!("insert into iceberg_tables (catalog_name, table_namespace, table_name, metadata_location,iceberg_type) values ('{catalog_name}', '{namespace}', '{name}', '{metadata_location}','TABLE');")).execute(&self.pool).await.map_err(Error::from)?;
         }
         self.cache.write().unwrap().insert(
             identifier.clone(),
@@ -709,6 +722,7 @@ impl SqlCatalogList {
                                 table_name varchar(255) not null,
                                 metadata_location varchar(255) not null,
                                 previous_metadata_location varchar(255),
+                                iceberg_type varchar(255),
                                 primary key (catalog_name, table_namespace, table_name)
                             );",
                     )
