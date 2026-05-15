@@ -211,8 +211,17 @@ impl Catalog for SqlCatalog {
         todo!()
     }
     /// Check if a namespace exists
-    async fn namespace_exists(&self, _namespace: &Namespace) -> Result<bool, IcebergError> {
-        todo!()
+    async fn namespace_exists(&self, namespace: &Namespace) -> Result<bool, IcebergError> {
+        let catalog_name = self.name.clone();        
+        
+        let rows = {
+            sqlx::query(&format!("select 1 from iceberg_namespace_properties where catalog_name = '{}' and namespace = '{}' and property_key='exists' and property_value='true' ;",&catalog_name,
+                &namespace
+                )).fetch_all(&self.pool).await.map_err(Error::from)?
+        };
+        let mut iter = rows.iter().map(query_map);
+
+        Ok(iter.next().is_some())
     }
     async fn list_tabulars(&self, namespace: &Namespace) -> Result<Vec<Identifier>, IcebergError> {
         let name = self.name.clone();
