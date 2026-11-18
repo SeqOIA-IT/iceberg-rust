@@ -62,66 +62,64 @@ impl<'table, 'manifests> PruneManifests<'table, 'manifests> {
     }
 }
 
+impl PruneManifests<'_, '_> {
+    /// index et champ de partition correspondant à une colonne du prédicat (après
+    /// `transform_predicate`, les colonnes portent le nom du champ de partition)
+    fn partition_field(&self, column: &Column) -> Option<(usize, &BoundPartitionField<'_>)> {
+        self.partition_fields
+            .iter()
+            .enumerate()
+            .find(|(_, field)| field.name() == column.name())
+    }
+
+    /// une valeur par manifest (None si inconnue) : les tableaux renvoyés à DataFusion doivent
+    /// avoir exactement `num_containers()` éléments, dans l'ordre des manifests
+    fn bounds(&self, column: &Column, lower: bool) -> Option<ArrayRef> {
+        let (index, partition_field) = self.partition_field(column)?;
+        let data_type = partition_field
+            .field_type()
+            .tranform(partition_field.transform())
+            .ok()?;
+        let values = self.files.iter().map(|manifest| {
+            manifest
+                .partitions
+                .as_ref()
+                .and_then(|partitions| partitions.get(index))
+                .and_then(|summary| {
+                    if lower {
+                        summary.lower_bound.as_ref()
+                    } else {
+                        summary.upper_bound.as_ref()
+                    }
+                })
+                .map(|value| value.clone().into_any())
+        });
+        any_iter_to_array(values, &(&data_type).try_into().ok()?).ok()
+    }
+}
+
 impl PruningStatistics for PruneManifests<'_, '_> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let (index, partition_field) = self
-            .partition_fields
-            .iter()
-            .enumerate()
-            .find(|(_, field)| field.name() == column.name())?;
-        let data_type = partition_field
-            .field_type()
-            .tranform(partition_field.transform())
-            .ok()?;
-        let min_values = self.files.iter().filter_map(|manifest| {
-            manifest.partitions.as_ref().and_then(|partitions| {
-                partitions[index]
-                    .lower_bound
-                    .as_ref()
-                    .map(|min| Some(min.clone().into_any()))
-            })
-        });
-        any_iter_to_array(min_values, &(&data_type).try_into().ok()?).ok()
+        self.bounds(column, true)
     }
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let (index, partition_field) = self
-            .partition_fields
-            .iter()
-            .enumerate()
-            .find(|(_, field)| field.name() == column.name())?;
-        let data_type = partition_field
-            .field_type()
-            .tranform(partition_field.transform())
-            .ok()?;
-        let max_values = self.files.iter().filter_map(|manifest| {
-            manifest.partitions.as_ref().and_then(|partitions| {
-                partitions[index]
-                    .upper_bound
-                    .as_ref()
-                    .map(|max| Some(max.clone().into_any()))
-            })
-        });
-        any_iter_to_array(max_values, &(&data_type).try_into().ok()?).ok()
+        self.bounds(column, false)
     }
     fn num_containers(&self) -> usize {
         self.files.len()
     }
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let (index, _) = self
-            .partition_fields
-            .iter()
-            .enumerate()
-            .find(|(_, field)| field.source_name() == column.name())?;
-        let contains_null = self.files.iter().filter_map(|manifest| {
-            manifest.partitions.as_ref().map(|partitions| {
-                if !partitions[index].contains_null {
-                    Some(0)
-                } else {
-                    None
-                }
-            })
+        let (index, _) = self.partition_field(column)?;
+        // la liste des manifests ne donne pas le nombre de nulls, seulement s'il y en a :
+        // 0 si aucun null, inconnu sinon
+        let null_counts = self.files.iter().map(|manifest| {
+            manifest
+                .partitions
+                .as_ref()
+                .and_then(|partitions| partitions.get(index))
+                .and_then(|summary| (!summary.contains_null).then_some(0i64))
         });
-        ScalarValue::iter_to_array(contains_null.map(ScalarValue::Int32)).ok()
+        ScalarValue::iter_to_array(null_counts.map(ScalarValue::Int64)).ok()
     }
     fn contained(
         &self,
@@ -132,10 +130,16 @@ impl PruningStatistics for PruneManifests<'_, '_> {
     }
 
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        // nombre de lignes vivantes du manifest = ADDED + EXISTING (et pas seulement ADDED :
+        // un manifest réécrit par overwrite/merge n'a que des entrées EXISTING, avec
+        // added_rows_count = 0 ; DataFusion l'élaguait alors via `null_count != row_count`)
         ScalarValue::iter_to_array(
             self.files
                 .iter()
-                .map(|x| x.added_rows_count)
+                .map(|x| match (x.added_rows_count, x.existing_rows_count) {
+                    (Some(added), Some(existing)) => Some(added + existing),
+                    _ => None,
+                })
                 .map(ScalarValue::Int64),
         )
         .ok()
@@ -465,5 +469,107 @@ fn value_to_scalarvalue(value: Value) -> Result<ScalarValue, Error> {
         x => Err(Error::NotSupported(format!(
             "Transforming {x} to iceberg value"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::{
+        arrow::datatypes::{DataType, Field, Schema as ArrowSchema},
+        common::DFSchema,
+        execution::context::ExecutionProps,
+        physical_expr::create_physical_expr,
+        physical_optimizer::pruning::PruningPredicate,
+        prelude::{col, lit},
+    };
+    use iceberg_rust::spec::{
+        manifest_list::{Content, FieldSummary, ManifestListEntry},
+        partition::{PartitionField, PartitionSpec, Transform},
+        schema::Schema,
+        table_metadata::{partition_fields, FormatVersion},
+        types::{PrimitiveType, StructField, Type},
+        values::Value,
+    };
+
+    use super::{transform_predicate, PruneManifests};
+
+    fn manifest(
+        added_rows: i64,
+        existing_rows: i64,
+        bounds: Option<(&str, &str)>,
+    ) -> ManifestListEntry {
+        ManifestListEntry {
+            format_version: FormatVersion::V2,
+            manifest_path: "m.avro".to_owned(),
+            manifest_length: 1,
+            partition_spec_id: 0,
+            content: Content::Data,
+            sequence_number: 1,
+            min_sequence_number: 1,
+            added_snapshot_id: 1,
+            added_files_count: Some(if added_rows > 0 { 1 } else { 0 }),
+            existing_files_count: Some(if existing_rows > 0 { 1 } else { 0 }),
+            deleted_files_count: Some(0),
+            added_rows_count: Some(added_rows),
+            existing_rows_count: Some(existing_rows),
+            deleted_rows_count: Some(0),
+            partitions: bounds.map(|(lo, hi)| {
+                vec![FieldSummary {
+                    contains_null: false,
+                    contains_nan: false,
+                    lower_bound: Some(Value::String(lo.to_owned())),
+                    upper_bound: Some(Value::String(hi.to_owned())),
+                }]
+            }),
+            key_metadata: None,
+        }
+    }
+
+    /// un manifest réécrit (que des entrées EXISTING, added_rows_count = 0) ne doit pas être
+    /// élagué, et un manifest sans résumé de partition ne doit pas décaler les suivants
+    #[test]
+    fn test_prune_manifests_existing_entries() {
+        let schema = Schema::builder()
+            .with_struct_field(StructField {
+                id: 1,
+                name: "rec_code".to_string(),
+                required: true,
+                field_type: Type::Primitive(PrimitiveType::String),
+                doc: None,
+            })
+            .build()
+            .unwrap();
+        let spec = PartitionSpec::builder()
+            .with_partition_field(PartitionField::new(1, 1000, "rec_code", Transform::Identity))
+            .build()
+            .unwrap();
+        let fields = partition_fields(&spec, &schema).unwrap();
+        let partition_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "rec_code",
+            DataType::Utf8,
+            false,
+        )]));
+
+        let manifests = vec![
+            manifest(0, 100, Some(("a", "a"))), // réécrit, contient 'a'
+            manifest(100, 0, Some(("a", "a"))), // ajouté, contient 'a'
+            manifest(0, 100, Some(("b", "b"))), // ne contient pas 'a'
+            manifest(0, 100, None),             // pas de résumé : inconnu
+            manifest(10, 0, Some(("a", "a"))),  // après un manifest sans résumé
+            manifest(10, 0, Some(("c", "c"))),  // ne contient pas 'a'
+        ];
+
+        let predicate = transform_predicate(col("rec_code").eq(lit("a")), &fields).unwrap();
+        let df_schema = DFSchema::try_from(partition_schema.as_ref().clone()).unwrap();
+        let physical =
+            create_physical_expr(&predicate, &df_schema, &ExecutionProps::new()).unwrap();
+        let pruning = PruningPredicate::try_new(physical, partition_schema).unwrap();
+        let keep = pruning
+            .prune(&PruneManifests::new(&fields, &manifests))
+            .unwrap();
+
+        assert_eq!(keep, vec![true, true, false, true, true, false]);
     }
 }
